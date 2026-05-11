@@ -81,10 +81,10 @@ type ShardKV struct {
 type ShardState string
 
 const (
-	Serving   ShardState = "Serving"
-	BePulling ShardState = "BePulling"
-	BeGCing   ShardState = "BeGCing"
-	Invalid   ShardState = "Invalid"
+	Serving   = "Serving"   // 当前分片正常服务中
+	Pulling   = "Pulling"   // 当前分片正在从其它复制组中拉取信息
+	BePulling = "BePulling" // 当前分片正在复制给其它复制组
+	GCing     = "GCing"     // 当前分片正在等待清除（监视器检测到后需要从拥有这个分片的复制组中删除分片）
 )
 
 type Shard struct {
@@ -178,7 +178,7 @@ func checkNotPutGetAppend(cmdType string) bool {
 func (kv *ShardKV) checkShardAndState(shardId int) bool {
 	shard, ok := kv.shards[shardId]
 	if ok && kv.currentConfig.Shards[shardId] == kv.gid &&
-		(shard.State == Serving || shard.State == BeGCing) {
+		(shard.State == Serving || shard.State == GCing) {
 		return true
 	}
 	return false
@@ -350,7 +350,7 @@ func (kv *ShardKV) processAddConfig(newConfig *shardctrler.Config, reply *Common
 			if newConfig.Shards[i] == kv.gid && kv.currentConfig.Shards[i] != kv.gid {
 				// 若当前该分片由其它组管理的话，需要从其它组那里拉去信息
 				if kv.currentConfig.Shards[i] != 0 {
-					kv.shards[i].State = Serving
+					kv.shards[i].State = Pulling
 				}
 			}
 			// 第 i 个分片从由自己管理到不由自己管理
@@ -379,11 +379,11 @@ func (kv *ShardKV) processInsertShard(response *PullShardReply, reply *CommonRep
 		Shards := response.Shards
 		for shardId, shard := range Shards {
 			oldShard := kv.shards[shardId]
-			if oldShard.State == BePulling {
+			if oldShard.State == Pulling {
 				for key, value := range shard.ShardKVDB {
 					oldShard.ShardKVDB[key] = value
 				}
-				oldShard.State = BeGCing
+				oldShard.State = GCing
 			}
 		}
 		DPrintf("server [%d, %d] updates shards [%+v], now shards [%s]", kv.me, kv.gid, Shards, ToString(kv.shards))
@@ -488,6 +488,170 @@ func (kv *ShardKV) monitorRequestConfig() {
 	}
 }
 
+func (kv *ShardKV) monitorInsert() {
+	for !kv.killed() {
+		if _, isLeader := kv.rf.GetState(); !isLeader {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		kv.mu.Lock()
+		id, gid := kv.me, kv.gid
+		groups := kv.getShardIdsWithSpecifiedState(Pulling)
+		wg := &sync.WaitGroup{}
+		wg.Add(len(groups))
+		if len(groups) != 0 {
+			DPrintf("server [%d, %d] in monitorInsert() requests pull shards in monitorInsert, groups [%+v]", id, gid, groups)
+		}
+		for oldGid, shardIds := range groups {
+			configNum, servers := kv.currentConfig.Num, kv.lastConfig.Groups[oldGid]
+			go func(oldGid int, configNum int, servers []string, shardIds []int) {
+				defer wg.Done()
+				DPrintf("server [%d, %d] send GetShards request to other servers, oldGid [%d], configNum [%d], servers [%+v], shardIds [%+v]",
+					id, gid, oldGid, configNum, servers, shardIds)
+				for _, server := range servers {
+					args := &PullShardArgs{
+						Gid:       oldGid,
+						ShardIds:  shardIds,
+						ConfigNum: configNum,
+					}
+					reply := &PullShardReply{}
+					srv := kv.make_end(server)
+					ok := srv.Call("ShardKV.GetShards", args, reply)
+					if ok && reply.Err == OK {
+						reply.ConfigNum = configNum
+						command := Command{
+							CommandType: InsertShard,
+							Data:        *reply,
+						}
+						DPrintf("server [%d, %d] StartCommand [%+v]", id, gid, command)
+						kv.StartCommand(command, &CommonReply{})
+					}
+				}
+			}(oldGid, configNum, servers, shardIds)
+		}
+		kv.mu.Unlock()
+		wg.Wait()
+		time.Sleep(100 * time.Millisecond)
+
+	}
+}
+
+func (kv *ShardKV) getShardIdsWithSpecifiedState(state ShardState) map[int][]int {
+	tmp := make(map[int][]int)
+	for shardId, shard := range kv.shards {
+		if shard.State == state {
+			gid := kv.lastConfig.Shards[shardId]
+			if _, ok := tmp[gid]; !ok {
+				tmp[gid] = make([]int, 0)
+			}
+			tmp[gid] = append(tmp[gid], shardId)
+		}
+	}
+	return tmp
+}
+
+func (kv *ShardKV) GetShards(args *PullShardArgs, reply *PullShardReply) {
+	if _, isLeader := kv.rf.GetState(); !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	}
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	if args.ConfigNum == kv.currentConfig.Num {
+		shards := make(map[int]Shard)
+		for _, shardId := range args.ShardIds {
+			_, ok := kv.shards[shardId]
+			if ok && kv.shards[shardId].State == BePulling {
+				shards[shardId] = kv.shards[shardId].CopyShard()
+			}
+		}
+		reply.Err, reply.Shards, reply.LastRequestMap = OK, shards, kv.copyLastRequestMap()
+	} else {
+		DPrintf("server [%d, %d] receives out of data GetShards request, currentConfigNum [%d], requestConfigNum [%d]", kv.me, kv.gid, kv.currentConfig.Num, args.ConfigNum)
+		reply.Err = ErrWrongGroup
+	}
+}
+
+func (s *Shard) CopyShard() Shard {
+	newData := make(map[string]string, len(s.ShardKVDB))
+	for k, v := range s.ShardKVDB {
+		newData[k] = v
+	}
+
+	return Shard{
+		ShardKVDB: newData,
+		State:     Serving,
+	}
+}
+
+func (kv *ShardKV) copyLastRequestMap() map[int64]int64 {
+	lastRequestMap := make(map[int64]int64)
+	for clientId, requestId := range kv.LastRequestMap {
+		lastRequestMap[clientId] = requestId
+	}
+	return lastRequestMap
+}
+
+func (kv *ShardKV) monitorGC() {
+	for !kv.killed() {
+		if _, isLeader := kv.rf.GetState(); !isLeader {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		kv.mu.Lock()
+		id, gid := kv.me, kv.gid
+		groups := kv.getShardIdsWithSpecifiedState(GCing)
+		wg := &sync.WaitGroup{}
+		wg.Add(len(groups))
+		if len(groups) != 0 {
+			DPrintf("server [%d, %d] in monitorGC() is requested pull shards in monitorGC, groups [%+v]", id, gid, groups)
+		}
+		for oldGid, shardIds := range groups {
+			configNum, servers := kv.currentConfig.Num, kv.lastConfig.Groups[oldGid]
+			go func(oldGid int, configNum int, servers []string, shardIds []int) {
+				defer wg.Done()
+				DPrintf("server [%d, %d] send DeleteShards request, oldGid [%d], configNum [%d], servers [%+v], shardIds [%+v]",
+					id, gid, oldGid, configNum, servers, shardIds)
+				for _, server := range servers {
+					args := &RemoveShardArgs{
+						ShardIds:  shardIds,
+						ConfigNum: configNum,
+					}
+					reply := &RemoveShardReply{}
+					srv := kv.make_end(server)
+					ok := srv.Call("ShardKV.DeleteShards", args, reply)
+					if ok && reply.Err == OK {
+						adjargs := AdjustShardArgs{
+							ShardIds:  shardIds,
+							ConfigNum: configNum,
+						}
+						command := Command{
+							CommandType: AdjustShardState,
+							Data:        adjargs,
+						}
+						kv.StartCommand(command, &CommonReply{})
+						DPrintf("server [%d, %d] adjust shard state over!!", id, gid)
+					}
+				}
+			}(oldGid, configNum, servers, shardIds)
+		}
+		kv.mu.Unlock()
+		wg.Wait()
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func (kv *ShardKV) DeleteShards(args *RemoveShardArgs, reply *RemoveShardReply) {
+	command := Command{
+		CommandType: DeleteShard,
+		Data:        *args,
+	}
+	response := &CommonReply{}
+	DPrintf("server [%d, %d] StartCommand [%+v]", kv.me, kv.gid, command)
+	kv.StartCommand(command, response)
+	reply.Err = response.Err
+}
+
 // the tester calls Kill() when a ShardKV instance won't
 // be needed again. you are not required to do anything
 // in Kill(), but it might be convenient to (for example)
@@ -548,6 +712,10 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	labgob.Register(Command{})
 	labgob.Register(GetPutAppendArgs{})
 	labgob.Register(shardctrler.Config{})
+	labgob.Register(PullShardReply{})
+	labgob.Register(RemoveShardArgs{})
+	labgob.Register(AdjustShardArgs{})
+	labgob.Register(Shard{})
 
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
@@ -557,6 +725,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.waitChMap = make(map[int]chan *CommonReply)
 	kv.LastRequestMap = make(map[int64]int64)
 	kv.persister = persister
+	kv.readPersist(kv.persister.ReadSnapshot())
 
 	for shardId := 0; shardId < shardctrler.NShards; shardId++ {
 		if _, ok := kv.shards[shardId]; !ok {
@@ -566,6 +735,8 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 
 	go kv.applier()
 	go kv.monitorRequestConfig()
+	go kv.monitorInsert()
+	go kv.monitorGC()
 
 	return kv
 }
