@@ -23,7 +23,7 @@ Lab 1 和 Lab 3 在大方向上仍然是 MapReduce 和 Raft，但具体目录名
 | Lab 2: Key/Value Server | 实现单机 Key/Value 服务，支持 `Get`、`Put`、`Append`，并在 RPC 可能丢失时保证客户端重试不会导致重复执行。 | 已完成代码实现。服务端使用锁保护内存 map，并通过请求 ID 缓存处理重复请求；客户端失败后持续重试，完成后调用 `Finish` 清理请求记录。仓库内未保存单独测试结果文件。 | `src/kvsrv/`，核心文件为 `src/kvsrv/server.go`、`src/kvsrv/client.go`、`src/kvsrv/common.go`。 |
 | Lab 3: Raft | 实现 Raft 共识算法，包括领导者选举、日志复制、持久化和快照，使上层服务能在故障、重启和网络分区下复制状态机命令。 | 已完成 Lab 3A-3D 的代码实现。`src/raft/test_result/test_2_500times.txt` 中保存了 `go test -run 3C` 的多轮通过记录；快照相关 3D 代码已实现，但仓库内未看到单独保存的 3D 测试结果。 | `src/raft/`，核心文件为 `src/raft/raft.go`、`src/raft/persister.go`、`src/raft/util.go`；循环测试脚本为 `src/raft/run_test.sh`。 |
 | Lab 4: Fault-tolerant Key/Value Service | 基于 Lab 3 的 Raft 实现容错 Key/Value 服务，所有 `Get`、`Put`、`Append` 通过 Raft 达成一致，并支持客户端去重和快照压缩日志。 | 已完成代码实现。Lab 4A 已有 `go test -run 4A -race` 的 10 轮通过记录，保存在 `src/kvraft/test_result/result.txt`；Lab 4B 快照逻辑已写入代码，但仓库内未看到单独保存的 4B 测试结果。 | `src/kvraft/`，核心文件为 `src/kvraft/server.go`、`src/kvraft/client.go`、`src/kvraft/common.go`；循环测试脚本为 `src/kvraft/run_test.sh`。 |
-| Lab 5: Sharded Key/Value Service | 实现分片 Key/Value 服务。ShardCtrler 负责管理配置变更和分片分配，ShardKV 负责多 Raft 组之间的分片读写、迁移、拒绝错误分片请求和故障恢复。 | 未完成。目前 `src/shardctrler/server.go`、`src/shardctrler/client.go`、`src/shardkv/server.go` 仍保留大量模板逻辑和空 RPC 处理函数，尚未形成可运行解法。 | 待实现路径为 `src/shardctrler/` 与 `src/shardkv/`；测试文件分别在 `src/shardctrler/test_test.go`、`src/shardkv/test_test.go`。 |
+| Lab 5: Sharded Key/Value Service | 实现分片 Key/Value 服务。ShardCtrler 负责管理配置变更和分片分配，ShardKV 负责多 Raft 组之间的分片读写、迁移、拒绝错误分片请求和故障恢复。 | 已完成 Lab 5A/5B。ShardCtrler 已实现 Join/Leave/Move/Query 及确定性 rebalance；ShardKV 已实现静态分片、动态配置推进、shard 数据迁移、GC、客户端去重状态迁移和 snapshot 恢复。最新提交后 `src/shardkv` 的 `go test -run 5B -count=1 -timeout 600s` 通过。 | `src/shardctrler/` 与 `src/shardkv/`；测试文件分别在 `src/shardctrler/test_test.go`、`src/shardkv/test_test.go`。 |
 
 ## 各 Lab 说明
 
@@ -63,7 +63,11 @@ Lab 4 的目标是在 Raft 之上实现线性一致的容错 KV 服务。客户�
 
 Lab 5 的目标是把 KV 服务扩展为分片系统。ShardCtrler 维护全局配置，决定每个 shard 属于哪个 replica group；ShardKV 则需要根据配置处理请求、迁移 shard，并在配置变更、故障、重启和网络不可靠时保持正确性。
 
-当前 Lab 5 尚未完成。`src/shardctrler/` 和 `src/shardkv/` 主要还是课程骨架代码，其中服务端 RPC 处理和状态机逻辑尚未实现。
+当前实现已经完成 Lab 5A/5B。`src/shardctrler/` 中的控制器通过 Raft 复制 Join、Leave、Move、Query 操作，维护按编号递增的 Config，并在 group 变化时确定性地重新分配 shard。`src/shardkv/` 中的分片 KV 服务会周期性拉取下一份配置，把配置变更、客户端请求、shard 插入和旧 shard 删除都放进本组 Raft 日志中执行。
+
+ShardKV 的迁移流程使用 `Serving`、`Pulling`、`BePulling`、`GCing` 几种 shard 状态。新 owner 进入 `Pulling` 后向旧 owner 拉取 shard 数据和 `LastRequestMap` 去重表，成功写入本组 Raft 后进入 `GCing`；随后通知旧 owner 删除旧 shard，删除确认后再把本地状态改回 `Serving`。这样可以在配置切换期间拒绝错误 shard 请求，并保持 Put/Append 的 at-most-once 语义。
+
+快照方面，ShardKV 会在 Raft 状态超过 `maxraftstate` 后保存 `shards`、`LastRequestMap`、`lastConfig` 和 `currentConfig`，重启时从 snapshot 恢复这些状态。最新验证命令为 `cd src/shardkv && go test -run 5B -count=1 -timeout 600s`。
 
 ## 常用测试命令
 
@@ -92,5 +96,6 @@ go test -run 4B -race
 cd src/shardctrler
 go test
 cd ../shardkv
-go test
+go test -run 5A
+go test -run 5B -timeout 600s
 ```

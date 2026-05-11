@@ -47,6 +47,19 @@ code, tt { font-family: monospace; border-radius: 3px; font-size: 110%; color: #
 
 最终需要通过 `shardctrler` 和 `shardkv` 里的测试。
 
+## 当前仓库实现状态
+
+当前仓库使用的是经典 `shardctrler + shardkv` 骨架，不是 2026 版 `shardkv1/shardgrp` 骨架。代码已经完成 Lab 5A/5B：`shardctrler` 负责通过 Raft 复制配置变更并确定性 rebalance，`shardkv` 负责按配置服务 shard、拒绝错误 group 的请求、迁移 shard 数据和 client 去重状态，并在迁移完成后回收旧 shard。
+
+当前 `shardkv` 的迁移主线是 `Pulling -> InsertShard -> GCing -> DeleteShards -> Serving`。也就是说，新 owner 先拉取旧 owner 的 shard 数据和 `LastRequestMap`，写入本组 Raft 后进入等待 GC 状态，再通知旧 owner 删除旧数据，最后恢复为可服务状态。实现中没有保留额外的 `monitorBePulling/CheckShards` 主动确认流程。
+
+最近用于验证 Lab 5B 的命令是:
+
+```sh
+cd src/shardkv
+go test -run 5B -count=1 -timeout 600s
+```
+
 ## Part A: Controller And Static Sharding <span class="difficulty easy">(easy)</span>
 
 Part A 分两块:

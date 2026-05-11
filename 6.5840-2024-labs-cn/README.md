@@ -11,6 +11,8 @@ code, tt { font-family: monospace; border-radius: 3px; font-size: 110%; color: #
 
 目录中保留了 MIT 6.5840 Spring 2024 的原始 HTML，并为每个 lab 配了一份中文阅读导览。
 
+本目录主要整理课程要求和阅读提示；当前仓库的实现进度、验证命令和代码状态以根目录 `README.md` 为准。当前代码已完成经典 `shardctrler + shardkv` 结构下的 Lab 5A/5B。
+
 | Lab | 原始页面 | 中文导读 |
 | --- | --- | --- |
 | Lab 1 MapReduce | `lab-mr.html` | `lab-mr.zh-guide.md` |
