@@ -89,6 +89,7 @@ func (ck *Clerk) Get(key string) string {
 					return reply.Value
 				}
 				if ok && (reply.Err == ErrWrongGroup) {
+					// 配置过期时跳出当前 group，重新向 shardctrler 查询最新配置。
 					break
 				}
 				// ... not ok, or ErrWrongLeader
@@ -126,6 +127,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 					return
 				}
 				if ok && reply.Err == ErrWrongGroup {
+					// ErrWrongGroup 不推进 RequestId；同一个请求会带着原序号重试。
 					break
 				}
 				// ... not ok, or ErrWrongLeader

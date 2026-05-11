@@ -63,16 +63,19 @@ type ShardCtrler struct {
 	applyCh chan raft.ApplyMsg
 
 	// Your data here.
-	dead           int32
-	configs        []Config // indexed by config num
+	dead    int32
+	configs []Config // indexed by config num
+	// 每个 client 已经执行到的最大请求号，用来过滤重复 Join/Leave/Move/Query。
 	LastRequestMap map[int64]int64
-	waitChMap      map[int]chan *Op
+	// RPC handler 等待自己提交到 Raft 的 log index 被 apply。
+	waitChMap map[int]chan *Op
 }
 
 type Op struct {
 	// Your data here.
 	ClientId  int64
 	RequestId int64
+	// shardctrler 的所有外部操作都包装成 Op，通过 Raft 复制后再修改 configs。
 	OpType    string
 	Servers   map[int][]string //Join, gid - servers mappings
 	GIDs      []int            //Leave
@@ -313,6 +316,7 @@ func (sc *ShardCtrler) applier() {
 		applyMsg := <-sc.applyCh
 		sc.mu.Lock()
 		DPrintf("[%d] receives applyMsg [%v]", sc.me, applyMsg)
+		// 只有 Raft apply 后才真正修改配置，这样所有 shardctrler 副本看到同一串 configs。
 		op := applyMsg.Command.(Op)
 		sc.execute(&op)
 		currentTerm, isLeader := sc.rf.GetState()
@@ -348,6 +352,7 @@ func (sc *ShardCtrler) processJoin(op *Op) {
 	for gid, servers := range op.Servers {
 		newGroups[gid] = servers
 	}
+	// Join/Leave 后都要重新均衡 shard，并且所有副本必须算出完全相同的结果。
 	sc.adjustShards(newGroups, &newShards)
 	newConfig := Config{
 		Num:    sc.configs[n-1].Num + 1,
@@ -364,6 +369,7 @@ func (sc *ShardCtrler) processLeave(op *Op) {
 	for _, gid := range op.GIDs {
 		for shardId, belongGid := range newShards {
 			if gid == belongGid {
+				// 先把离开 group 的 shard 放回 GID 0，再由 adjustShards 分给剩余 group。
 				newShards[shardId] = 0
 			}
 		}
@@ -396,6 +402,7 @@ func (sc *ShardCtrler) processMove(op *Op) {
 func (sc *ShardCtrler) processQuery(op *Op) {
 	num, n := op.Num, len(sc.configs)
 	if num == -1 || num >= n {
+		// Query(-1) 或超过最大配置号时返回最新配置。
 		op.Configure = sc.configs[n-1]
 		return
 	}
@@ -406,6 +413,7 @@ func (sc *ShardCtrler) copyGroups() map[int][]string {
 	n := len(sc.configs)
 	newGroups := make(map[int][]string, len(sc.configs[n-1].Groups))
 	for gid, servers := range sc.configs[n-1].Groups {
+		// Config 里的 map/slice 都要深拷贝，避免后续配置改动污染历史配置。
 		copy_servers := make([]string, len(servers))
 		copy(copy_servers, servers)
 		newGroups[gid] = copy_servers
@@ -432,6 +440,7 @@ func (sc *ShardCtrler) adjustShards(newGroups map[int][]string, newShards *[NSha
 			return
 		}
 		DPrintf("[%d] cnt [%v], newShards [%+v]", sc.me, cnt, newShards)
+		// 每次从 shard 最多的 group 挪一个到最少的 group，直到数量差不超过 1。
 		shardId := cnt[maxGid][0]
 		cnt[maxGid] = cnt[maxGid][1:]
 		cnt[minGid] = append(cnt[minGid], shardId)

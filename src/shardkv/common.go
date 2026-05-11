@@ -54,9 +54,10 @@ type PullShardArgs struct {
 }
 
 type PullShardReply struct {
-	Err            Err
-	ConfigNum      int
-	Shards         map[int]Shard
+	Err       Err
+	ConfigNum int
+	Shards    map[int]Shard
+	// shard 迁移时同时带上去重表，防止客户端重试请求在新 owner 上重复执行。
 	LastRequestMap map[int64]int64
 }
 
@@ -80,10 +81,11 @@ type Command struct {
 }
 
 const (
-	Get              = "Get"
-	Put              = "Put"
-	Append           = "Append"
-	AddConfig        = "AddConfig"
+	Get       = "Get"
+	Put       = "Put"
+	Append    = "Append"
+	AddConfig = "AddConfig"
+	// 下面三个是 Lab5B 的内部迁移命令，也要走 Raft 保证组内副本顺序一致。
 	InsertShard      = "InsertShard"
 	DeleteShard      = "DeleteShard"
 	AdjustShardState = "AdjustShardState"

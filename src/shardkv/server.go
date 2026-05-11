@@ -67,12 +67,14 @@ type ShardKV struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
-	dead              int32
-	manager           *shardctrler.Clerk
-	currentConfig     shardctrler.Config
-	lastConfig        shardctrler.Config
-	shards            map[int]*Shard
-	waitChMap         map[int]chan *CommonReply
+	dead          int32
+	manager       *shardctrler.Clerk
+	currentConfig shardctrler.Config
+	// lastConfig 用来定位迁移前的 old owner；一次只推进一版配置才能保证它可靠。
+	lastConfig shardctrler.Config
+	shards     map[int]*Shard
+	waitChMap  map[int]chan *CommonReply
+	// group 级别的去重表，迁移 shard 时也会一起合并到新 owner。
 	LastRequestMap    map[int64]int64
 	lastIncludedIndex int
 	persister         *raft.Persister
@@ -116,6 +118,7 @@ func (kv *ShardKV) Get(args *GetPutAppendArgs, reply *GetReply) {
 	// Your code here.
 	kv.mu.Lock()
 	shardId := key2shard(args.Key)
+	// Lab5A: 请求打到错误 group，或者 shard 正在迁移中，都要让客户端刷新配置后重试。
 	if !kv.checkShardAndState(shardId) {
 		reply.Err = ErrWrongGroup
 		kv.mu.Unlock()
@@ -157,6 +160,7 @@ func (kv *ShardKV) StartCommand(command Command, response *CommonReply) {
 		}
 		response.Value, response.Err = res.Value, res.Err
 		currentTerm, stillLeader := kv.rf.GetState()
+		// 等到 apply 后还要确认 term/leader 没变，避免旧 leader 把不属于自己的结果回给客户端。
 		if !stillLeader || currentTerm != term {
 			response.Err = ErrWrongLeader
 		}
@@ -178,6 +182,7 @@ func checkNotPutGetAppend(cmdType string) bool {
 func (kv *ShardKV) checkShardAndState(shardId int) bool {
 	shard, ok := kv.shards[shardId]
 	if ok && kv.currentConfig.Shards[shardId] == kv.gid &&
+		// GCing 说明新 owner 已经有数据，只是在通知旧 owner 删除，仍可继续服务。
 		(shard.State == Serving || shard.State == GCing) {
 		return true
 	}
@@ -193,6 +198,7 @@ func (kv *ShardKV) PutAppend(args *GetPutAppendArgs, reply *PutAppendReply) {
 		kv.mu.Unlock()
 		return
 	}
+	// Put/Append 才需要提前过滤重复请求；Get 即使重复执行也不会改变状态。
 	if kv.isInvalidRequest(args.ClientId, args.RequestId) {
 		reply.Err = OK
 		kv.mu.Unlock()
@@ -235,6 +241,7 @@ func (kv *ShardKV) applier() {
 				kv.notifyWaitCh(applyMsg.CommandIndex, reply)
 			}
 			if kv.maxraftstate != -1 && kv.persister.RaftStateSize() > kv.maxraftstate {
+				// Lab5B snapshot 要覆盖 shard 数据、去重表和配置状态，否则重启后迁移进度会丢。
 				kv.rf.Snapshot(applyMsg.CommandIndex, kv.encodeState())
 			}
 			kv.lastIncludedIndex = applyMsg.CommandIndex
@@ -293,6 +300,7 @@ func (kv *ShardKV) execute(cmd interface{}) *CommonReply {
 	reply := &CommonReply{
 		Err: OK,
 	}
+	// 客户端请求、配置变更和 shard 迁移/GC 都走同一个 Raft 日志，保证顺序一致。
 	// DPrintf("server [%d, %d] ready for execute command [%+v]", kv.me, kv.gid, command)
 	switch command.CommandType {
 	case Get, Put, Append:
@@ -330,6 +338,7 @@ func (kv *ShardKV) processGetPutAppend(op *GetPutAppendArgs, reply *CommonReply)
 			kv.shards[shardId].append(op.Key, op.Value)
 		}
 		// DPrintf("server [%d, %d] processGetPutAppend OpType [%s] success!", kv.me, kv.gid, op.OpType)
+		// 记录最大 RequestId，后续重复 Put/Append 只返回 OK，不再修改数据。
 		kv.UpdateLastRequest(op)
 	}
 }
@@ -362,6 +371,7 @@ func (kv *ShardKV) processAddConfig(newConfig *shardctrler.Config, reply *Common
 			}
 			states += string(kv.shards[i].State) + ", "
 		}
+		// 切换配置前保留旧配置，后面 Pulling/GCing 都要根据 lastConfig 找 old owner。
 		kv.lastConfig = kv.currentConfig
 		kv.currentConfig = *newConfig
 		DPrintf("server [%d, %d] updates shards state and config over, shard state [%s]", kv.me, kv.gid, states)
@@ -380,6 +390,7 @@ func (kv *ShardKV) processInsertShard(response *PullShardReply, reply *CommonRep
 		for shardId, shard := range Shards {
 			oldShard := kv.shards[shardId]
 			if oldShard.State == Pulling {
+				// 新 owner 通过 Raft 安装拉来的数据，安装完成后进入 GCing 通知旧 owner 删除。
 				for key, value := range shard.ShardKVDB {
 					oldShard.ShardKVDB[key] = value
 				}
@@ -390,6 +401,7 @@ func (kv *ShardKV) processInsertShard(response *PullShardReply, reply *CommonRep
 		LastRequestMap := response.LastRequestMap
 
 		for clientId, requestId := range LastRequestMap {
+			// 去重表取 max，避免迁移过来的旧值覆盖本组已经处理过的更新请求。
 			kv.LastRequestMap[clientId] = max(requestId, kv.LastRequestMap[clientId])
 		}
 
@@ -407,6 +419,7 @@ func (kv *ShardKV) processDeleteShard(args *RemoveShardArgs, reply *CommonReply)
 		for _, shardId := range args.ShardIds {
 			_, ok := kv.shards[shardId]
 			if ok && kv.shards[shardId].State == BePulling {
+				// 旧 owner 收到删除确认后清空本地 shard；之后它不再服务这些数据。
 				kv.shards[shardId] = MakeShard(Serving)
 			}
 		}
@@ -428,6 +441,7 @@ func (kv *ShardKV) processAdjustGCingShard(args *AdjustShardArgs, reply *CommonR
 		DPrintf("server [%d, %d] original shards [%s]", kv.me, kv.gid, ToString(kv.shards))
 		for _, shardId := range args.ShardIds {
 			if _, ok := kv.shards[shardId]; ok {
+				// 新 owner 确认旧 owner 已删除后，把 GCing shard 切回正常 Serving。
 				kv.shards[shardId].State = Serving
 			}
 		}
@@ -473,6 +487,7 @@ func (kv *ShardKV) monitorRequestConfig() {
 		kv.mu.Unlock()
 
 		if !isProcessShardCommand {
+			// 只有当前配置完全稳定后才拉下一版，避免多轮迁移状态叠在一起。
 			newConfig := kv.manager.Query(currentConfigNum + 1)
 			if newConfig.Num == currentConfigNum+1 {
 				reply := &CommonReply{}
@@ -496,6 +511,7 @@ func (kv *ShardKV) monitorInsert() {
 		}
 		kv.mu.Lock()
 		id, gid := kv.me, kv.gid
+		// Pulling shard 按旧 owner 分组，方便一次向同一个旧 group 拉多个 shard。
 		groups := kv.getShardIdsWithSpecifiedState(Pulling)
 		wg := &sync.WaitGroup{}
 		wg.Add(len(groups))
@@ -503,6 +519,7 @@ func (kv *ShardKV) monitorInsert() {
 			DPrintf("server [%d, %d] in monitorInsert() requests pull shards in monitorInsert, groups [%+v]", id, gid, groups)
 		}
 		for oldGid, shardIds := range groups {
+			// 对 Pulling shard，lastConfig 里的 gid 就是数据来源。
 			configNum, servers := kv.currentConfig.Num, kv.lastConfig.Groups[oldGid]
 			go func(oldGid int, configNum int, servers []string, shardIds []int) {
 				defer wg.Done()
@@ -562,9 +579,11 @@ func (kv *ShardKV) GetShards(args *PullShardArgs, reply *PullShardReply) {
 		for _, shardId := range args.ShardIds {
 			_, ok := kv.shards[shardId]
 			if ok && kv.shards[shardId].State == BePulling {
+				// 返回副本，避免 RPC 编码时和本地状态修改产生共享 map/race。
 				shards[shardId] = kv.shards[shardId].CopyShard()
 			}
 		}
+		// 去重表也迁移，避免客户端重试 Append 时在新 owner 上重复执行。
 		reply.Err, reply.Shards, reply.LastRequestMap = OK, shards, kv.copyLastRequestMap()
 	} else {
 		DPrintf("server [%d, %d] receives out of data GetShards request, currentConfigNum [%d], requestConfigNum [%d]", kv.me, kv.gid, kv.currentConfig.Num, args.ConfigNum)
@@ -600,6 +619,7 @@ func (kv *ShardKV) monitorGC() {
 		}
 		kv.mu.Lock()
 		id, gid := kv.me, kv.gid
+		// GCing 表示本组已经有数据，下一步是通知旧 owner 删除它的旧副本。
 		groups := kv.getShardIdsWithSpecifiedState(GCing)
 		wg := &sync.WaitGroup{}
 		wg.Add(len(groups))
