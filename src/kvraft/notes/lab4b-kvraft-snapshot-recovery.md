@@ -8,6 +8,14 @@ KVServer apply 命令后发现 Raft 日志太大 -> 编码 KVDB + LastRequestMap
 
 Lab4B 解决的是日志无限增长的问题。Lab4A 中每个 `Get/Put/Append` 都会进入 Raft 日志；如果系统长期运行，重启时就要重放很长的日志。Snapshot 把“已经 apply 到某个 index 的状态机结果”保存下来，让 Raft 可以丢掉这之前的日志。
 
+## 先抓重点
+
+- Snapshot 保存的是 KVServer 状态机结果，不是完整 Raft 日志。
+- KVServer snapshot 至少要保存 `KVDB` 和 `LastRequestMap`。
+- 只有已经 apply 的日志才能被做进 snapshot。
+- Raft 负责裁剪旧日志和持久化 snapshot。
+- 重启或落后副本追赶时，会从 snapshot 恢复状态。
+
 ## Snapshot 保存什么
 
 KVServer 的 snapshot 保存的是上层状态机，不是 Raft 自己的 term、vote、log。

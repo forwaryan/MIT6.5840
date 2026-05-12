@@ -15,6 +15,14 @@ reducef(key, values) -> output
 
 代码里使用 `Master` 命名，含义就是课程新版里常说的 `Coordinator`。
 
+## 先抓重点
+
+- Master 只负责分配任务、记录状态、处理超时，不亲自执行 Map/Reduce。
+- Worker 主动找 Master 要任务，做完后再通知 Master。
+- Map 任务输出 `mr-X-Y`，其中 `X` 是 Map 编号，`Y` 是 Reduce 编号。
+- Reduce 任务读取所有 `mr-*-Y`，最后写出 `mr-out-Y`。
+- 某个 Worker 卡住时，Master 会把执行中的任务重新变回可分配状态。
+
 ## 整体架构
 
 ```mermaid

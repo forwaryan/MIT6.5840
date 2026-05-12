@@ -8,6 +8,14 @@ ShardCtrler 只负责一件事：
 
 它不保存 KV 数据，也不迁移 shard 数据；真正搬数据的是 Lab5B 的 ShardKV。
 
+## 先抓重点
+
+- ShardCtrler 管的是配置，不管真实 key/value 数据。
+- 配置里最重要的是 `Shards[shard] = gid`，表示每个 shard 属于哪个 group。
+- `Join/Leave/Move` 会生成新配置，`Query` 只读取配置。
+- shard 数量固定为 10，变化的是 shard 归哪个 gid。
+- ShardKV 只会来 `Query` 配置，不会自己调用 `Join/Leave` 改 group 集合。
+
 ## 固定分片模型
 
 Lab5 里的 shard 数量是固定的：

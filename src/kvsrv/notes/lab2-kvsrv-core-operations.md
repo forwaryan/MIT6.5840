@@ -8,6 +8,14 @@ RPC 可能失败，Client 会重试；
 Server 用请求 ID 过滤重复 Put/Append，避免同一个写操作执行多次。
 ```
 
+## 先抓重点
+
+- 这里只有一个 KVServer，没有 Raft，也没有副本同步。
+- Client RPC 失败后会一直重试，所以 Server 必须能识别重复写请求。
+- `Get` 不改数据，重复执行没问题。
+- `Put/Append` 会改数据，必须用 `Id` 去重。
+- `Finish` 只是清理请求缓存，不影响已经写入的 KV 数据。
+
 ## 整体架构
 
 ```mermaid

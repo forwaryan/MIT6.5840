@@ -8,6 +8,14 @@ service 调 Start(command) -> leader 追加日志 -> AppendEntries 复制给 fol
 
 Lab3B 把 Lab3A 选出的 leader 变成日志复制入口。上层服务不需要自己广播命令，只需要把命令交给某个 Raft peer；如果它不是 leader，`Start()` 会返回 `isLeader=false`。
 
+## 先抓重点
+
+- `Start(command)` 成功只代表 leader 收下了命令，还不代表已经提交。
+- Leader 用 `AppendEntries` 把日志复制给 follower。
+- 日志复制到多数派后，leader 才能推进 `commitIndex`。
+- `commitIndex` 前进后，apply goroutine 才会把命令送到 `applyCh`。
+- `nextIndex/matchIndex` 只由 leader 用来追踪每个 follower 复制到哪里。
+
 ## 核心数据
 
 | 字段 | 谁维护 | 含义 |

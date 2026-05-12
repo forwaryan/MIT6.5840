@@ -8,6 +8,14 @@ Follower 超时 -> Candidate 发 RequestVote -> 拿到多数票 -> Leader 周期
 
 Lab3A 先不处理客户端命令，重点是让一组 Raft peer 能在 leader 失联后重新选出一个 leader。上层服务只需要知道：只有 leader 才能接收 `Start(command)`。
 
+## 先抓重点
+
+- Follower 一段时间收不到心跳，就会变成 Candidate。
+- Candidate 先给自己投票，再向其他 peer 发 `RequestVote`。
+- 拿到多数票才可以成为 Leader。
+- Leader 周期性发 `AppendEntries`；没有日志时它就是心跳。
+- 看到更大的 term 时，任何角色都要退回 Follower。
+
 ## 三种角色
 
 | 角色 | 行为 |

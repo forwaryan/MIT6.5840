@@ -8,6 +8,14 @@ Raft 持久化 currentTerm / voteFor / log -> crash 后 readPersist 恢复 -> se
 
 Lab3C 解决 crash/restart 后不能忘记 Raft 关键状态的问题。Lab3D 解决日志无限增长的问题：上层服务已经把某段日志的结果做成 snapshot 后，Raft 可以丢掉那段日志。
 
+## 先抓重点
+
+- Lab3C 关心的是 Raft 自己不能忘：`currentTerm`、`voteFor`、`log`。
+- Lab3D 关心的是日志不能无限长：已经被上层做进 snapshot 的旧日志可以裁掉。
+- Snapshot 的边界是一个已经 apply 的日志 index。
+- 落后太多的 follower 追不上日志时，leader 会发 `InstallSnapshot`。
+- 有 snapshot 后，日志 index 不再等于 Go slice 下标，要通过 helper 换算。
+
 ## 持久化字段
 
 当前实现持久化：

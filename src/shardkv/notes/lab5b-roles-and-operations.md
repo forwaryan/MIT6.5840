@@ -6,6 +6,14 @@
 配置变化 -> new owner 拉 shard -> old owner 删旧 shard -> new owner 收尾
 ```
 
+## 先抓重点
+
+- Client 只关心 key 属于哪个 shard，再把请求发给当前 owner group。
+- ShardCtrler 只给配置，不搬数据。
+- ShardKV group 内部用 Raft 复制本组负责的 shard 数据。
+- 配置变化后，new owner 先拉数据，old owner 先保留旧数据。
+- new owner 确认 old owner 删除旧副本后，才从 `GCing` 变回 `Serving`。
+
 ## 整体架构
 
 ```mermaid

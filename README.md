@@ -16,6 +16,10 @@ flowchart LR
     L4 --> L5["Lab 5<br/>Sharded KV"]
 ```
 
+## 怎么读
+
+先看每篇开头的主线说明和“先抓重点”，再看流程图，最后再看代码入口。不要一上来就钻所有字段，先把“谁发请求、请求进不进 Raft、状态怎么变”串起来。
+
 ## 快速入口
 
 - [Lab1 MapReduce 核心操作](src/mr/notes/lab1-mapreduce-core-operations.md)

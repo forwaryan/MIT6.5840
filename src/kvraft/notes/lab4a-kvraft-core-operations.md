@@ -8,6 +8,14 @@ Client 发 Get/Put/Append -> KVServer leader 提交 Raft -> Raft commit -> KVSer
 
 Lab4A 的目标不是实现新的存储引擎，而是把一个普通内存 KV 状态机放到 Raft 日志后面。所有副本只要按照同一条 Raft 日志顺序执行 `Get`、`Put`、`Append`，就能得到同样的状态机结果。
 
+## 先抓重点
+
+- Client 只和 KVServer RPC 层交互，不直接操作 Raft。
+- KVServer 收到请求后先调用 `rf.Start(op)`，不能直接改 `KVDB`。
+- 真正修改 `KVDB` 的地方是 apply 后的 `execute(Op)`。
+- `waitChMap[index]` 用来把 RPC handler 和后来的 apply 结果对上。
+- `Get` 也要进 Raft，因为读写都要排进同一个顺序里。
+
 ## 整体架构
 
 ```mermaid
