@@ -89,7 +89,7 @@ flowchart LR
 ```
 
 | Lab | 主题 | 推荐阅读 |
-| --- | --- |
+| --- | --- | --- |
 | Lab 1 | MapReduce | [Lab1 MapReduce 核心操作](src/mr/notes/lab1-mapreduce-core-operations.md) |
 | Lab 2 | 单机 KV Server | [Lab2 KVServer 核心操作](src/kvsrv/notes/lab2-kvsrv-core-operations.md) |
 | Lab 3A | Raft 选举与心跳 | [Lab3A Raft 选举与心跳](src/raft/notes/lab3a-election-and-heartbeat.md) |
