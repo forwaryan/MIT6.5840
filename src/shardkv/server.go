@@ -388,13 +388,13 @@ func (kv *ShardKV) processInsertShard(response *PullShardReply, reply *CommonRep
 	if response.ConfigNum == kv.currentConfig.Num {
 		Shards := response.Shards
 		for shardId, shard := range Shards {
-			oldShard := kv.shards[shardId]
-			if oldShard.State == Pulling {
+			localShard := kv.shards[shardId]
+			if localShard.State == Pulling {
 				// 新 owner 通过 Raft 安装拉来的数据，安装完成后进入 GCing 通知旧 owner 删除。
 				for key, value := range shard.ShardKVDB {
-					oldShard.ShardKVDB[key] = value
+					localShard.ShardKVDB[key] = value
 				}
-				oldShard.State = GCing
+				localShard.State = GCing
 			}
 		}
 		DPrintf("server [%d, %d] updates shards [%+v], now shards [%s]", kv.me, kv.gid, Shards, ToString(kv.shards))
