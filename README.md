@@ -65,7 +65,11 @@ Lab 5 的目标是把 KV 服务扩展为分片系统。ShardCtrler 维护全局�
 
 当前实现已经完成 Lab 5A/5B。`src/shardctrler/` 中的控制器通过 Raft 复制 Join、Leave、Move、Query 操作，维护按编号递增的 Config，并在 group 变化时确定性地重新分配 shard。`src/shardkv/` 中的分片 KV 服务会周期性拉取下一份配置，把配置变更、客户端请求、shard 插入和旧 shard 删除都放进本组 Raft 日志中执行。
 
+Lab 5A 中 ShardCtrler 的操作、group/Raft 关系、配置结构、流程图和 rebalance 逻辑整理在 [Lab5A ShardCtrler 核心操作](src/shardctrler/notes/lab5a-shardctrler.md)。
+
 ShardKV 的迁移流程使用 `Serving`、`Pulling`、`BePulling`、`GCing` 几种 shard 状态。新 owner 进入 `Pulling` 后向旧 owner 拉取 shard 数据和 `LastRequestMap` 去重表，成功写入本组 Raft 后进入 `GCing`；随后通知旧 owner 删除旧 shard，删除确认后再把本地状态改回 `Serving`。这样可以在配置切换期间拒绝错误 shard 请求，并保持 Put/Append 的 at-most-once 语义。
+
+Lab 5B 中各角色可以触发的请求、group/Raft 关系、Raft command、迁移图和 shard 状态变化整理在 [Lab5B ShardKV 角色与操作表](src/shardkv/notes/lab5b-roles-and-operations.md)。
 
 快照方面，ShardKV 会在 Raft 状态超过 `maxraftstate` 后保存 `shards`、`LastRequestMap`、`lastConfig` 和 `currentConfig`，重启时从 snapshot 恢复这些状态。最新验证命令为 `cd src/shardkv && go test -run 5B -count=1 -timeout 600s`。
 
