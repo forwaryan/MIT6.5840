@@ -1,77 +1,176 @@
-# MIT 6.5840 Labs 项目进度
+# MIT 6.5840 Labs
 
-本仓库是 MIT 6.5840 分布式系统课程实验实现。下面的进度根据当前代码、笔记目录和已保存的测试结果整理。
+本仓库是 MIT 6.5840 分布式系统课程实验实现，代码骨架来自 `6.5840-golabs-2024`。当前实现覆盖 MapReduce、KV Server、Raft、KV over Raft，以及经典 `shardctrler + shardkv` 分片 KV 架构。
+
+```mermaid
+flowchart LR
+    L1["Lab 1<br/>MapReduce"] --> L2["Lab 2<br/>单机 KV"]
+    L2 --> L3["Lab 3<br/>Raft"]
+    L3 --> L4["Lab 4<br/>KV over Raft"]
+    L4 --> L5["Lab 5<br/>Sharded KV"]
+```
+
+## 快速入口
+
+- [Lab1 MapReduce 核心操作](src/mr/notes/lab1-mapreduce-core-operations.md)
+- [Lab2 KVServer 核心操作](src/kvsrv/notes/lab2-kvsrv-core-operations.md)
+- [Lab3A Raft 选举与心跳](src/raft/notes/lab3a-election-and-heartbeat.md)
+- [Lab3B Raft 日志复制与提交](src/raft/notes/lab3b-log-replication.md)
+- [Lab3C/3D Raft 持久化与快照](src/raft/notes/lab3c3d-persistence-and-snapshot.md)
+- [Lab4A KVRaft 核心请求链路](src/kvraft/notes/lab4a-kvraft-core-operations.md)
+- [Lab4B KVRaft Snapshot 与恢复](src/kvraft/notes/lab4b-kvraft-snapshot-recovery.md)
+- [Lab5A ShardCtrler 核心操作](src/shardctrler/notes/lab5a-shardctrler.md)
+- [Lab5B ShardKV 角色与操作表](src/shardkv/notes/lab5b-roles-and-operations.md)
+- [常用测试命令](#常用测试命令)
+- [目录结构](#目录结构)
 
 ## 版本说明
 
-这个仓库的代码骨架来自 `6.5840-golabs-2024` 模板，也就是更早一版 MIT 6.5840/6.824 实验骨架。它和 2026 课程网页不是同一套 starter code。
+这个仓库使用的是经典 6.5840/6.824 风格实验骨架，和 2026 课程网页上的新骨架不完全一致：
 
-和 2026 版相比，主要差异在实验结构本身，而不只是日期：
+- 当前 Lab 2 是 `Get/Put/Append` 单机 KV 服务；2026 Lab 2 是带 `version` 的 KV server。
+- 当前 Lab 4 是直接基于 `Raft` 实现 `kvraft`；2026 Lab 4 先实现通用 `rsm`。
+- 当前 Lab 5 是 `shardctrler + shardkv`；2026 Lab 5 使用 `shardctrler`、`shardgrp`、`shardkv1` 等新结构。
 
-- 2026 的 Lab 2 是带 `version` 的单机 KV server，当前仓库的 Lab 2 是 `Get/Put/Append` 的单机 KV 服务。
-- 2026 的 Lab 4 先做通用 `rsm`，再做基于 `rsm` 的 KV 服务；当前仓库的 Lab 4 是直接在 `Raft` 上实现 `kvraft`。
-- 2026 的 Lab 5 使用 `shardctrler`、`shardgrp`、`shardkv1` 这一套新骨架；当前仓库的 Lab 5 是经典的 `shardctrler + shardkv` 结构。
+如果要严格对照课程提交，请以你当年的 schedule 和 lab 页面为准。
 
-Lab 1 和 Lab 3 在大方向上仍然是 MapReduce 和 Raft，但具体目录名、测试入口、包拆分也和 2026 版不完全一样。
-如果要严格对照课程提交，请以你当年的 schedule 和 lab 页面为准；这份 README 主要描述的是这个仓库自己的实现进度。
+## 目录结构
+
+```mermaid
+flowchart TD
+    R["MIT6.5840"] --> SRC["src/"]
+    SRC --> MR["mr<br/>Lab 1"]
+    SRC --> KVSRV["kvsrv<br/>Lab 2"]
+    SRC --> RAFT["raft<br/>Lab 3"]
+    SRC --> KVRAFT["kvraft<br/>Lab 4"]
+    SRC --> SC["shardctrler<br/>Lab 5A"]
+    SRC --> SKV["shardkv<br/>Lab 5B"]
+    MR --> MRN["notes"]
+    KVSRV --> KVN["notes"]
+    RAFT --> RN["notes"]
+    KVRAFT --> KVRN["notes"]
+    SC --> SCN["notes"]
+    SKV --> SKVN["notes"]
+```
+
+| 路径 | 内容 |
+| --- | --- |
+| `src/mr/` | Lab 1 MapReduce |
+| `src/kvsrv/` | Lab 2 单机 KV Server |
+| `src/raft/` | Lab 3 Raft |
+| `src/kvraft/` | Lab 4 Fault-tolerant KV |
+| `src/shardctrler/` | Lab 5A ShardCtrler |
+| `src/shardkv/` | Lab 5B ShardKV |
+| `src/*/notes/` | 实验笔记和图解 |
+| `src/*/test_result/` | 已保存的部分测试记录 |
 
 ## Lab 总览
 
-| Lab | 实验内容 | 当前进度 | 解法路径 |
+| Lab | 当前状态 | 主要代码 | 说明 |
 | --- | --- | --- | --- |
-| Lab 1: MapReduce | 实现一个简化版分布式 MapReduce 框架，由 Coordinator 分配 Map/Reduce 任务，Worker 执行任务、生成中间文件并输出结果。 | 已完成代码实现。包含任务分配、Map/Reduce 阶段切换、Worker 超时后的任务重试、中间文件 `mr-X-Y` 与最终输出 `mr-out-X`。仓库内未保存单独测试结果文件，可用 `src/main/test-mr.sh` 复测。 | `src/mr/`，核心文件为 `src/mr/coordinator.go`、`src/mr/worker.go`、`src/mr/rpc.go`；测试入口在 `src/main/test-mr.sh`。 |
-| Lab 2: Key/Value Server | 实现单机 Key/Value 服务，支持 `Get`、`Put`、`Append`，并在 RPC 可能丢失时保证客户端重试不会导致重复执行。 | 已完成代码实现。服务端使用锁保护内存 map，并通过请求 ID 缓存处理重复请求；客户端失败后持续重试，完成后调用 `Finish` 清理请求记录。仓库内未保存单独测试结果文件。 | `src/kvsrv/`，核心文件为 `src/kvsrv/server.go`、`src/kvsrv/client.go`、`src/kvsrv/common.go`。 |
-| Lab 3: Raft | 实现 Raft 共识算法，包括领导者选举、日志复制、持久化和快照，使上层服务能在故障、重启和网络分区下复制状态机命令。 | 已完成 Lab 3A-3D 的代码实现。`src/raft/test_result/test_2_500times.txt` 中保存了 `go test -run 3C` 的多轮通过记录；快照相关 3D 代码已实现，但仓库内未看到单独保存的 3D 测试结果。 | `src/raft/`，核心文件为 `src/raft/raft.go`、`src/raft/persister.go`、`src/raft/util.go`；循环测试脚本为 `src/raft/run_test.sh`。 |
-| Lab 4: Fault-tolerant Key/Value Service | 基于 Lab 3 的 Raft 实现容错 Key/Value 服务，所有 `Get`、`Put`、`Append` 通过 Raft 达成一致，并支持客户端去重和快照压缩日志。 | 已完成代码实现。Lab 4A 已有 `go test -run 4A -race` 的 10 轮通过记录，保存在 `src/kvraft/test_result/result.txt`；Lab 4B 快照逻辑已写入代码，但仓库内未看到单独保存的 4B 测试结果。 | `src/kvraft/`，核心文件为 `src/kvraft/server.go`、`src/kvraft/client.go`、`src/kvraft/common.go`；循环测试脚本为 `src/kvraft/run_test.sh`。 |
-| Lab 5: Sharded Key/Value Service | 实现分片 Key/Value 服务。ShardCtrler 负责管理配置变更和分片分配，ShardKV 负责多 Raft 组之间的分片读写、迁移、拒绝错误分片请求和故障恢复。 | 已完成 Lab 5A/5B。ShardCtrler 已实现 Join/Leave/Move/Query 及确定性 rebalance；ShardKV 已实现静态分片、动态配置推进、shard 数据迁移、GC、客户端去重状态迁移和 snapshot 恢复。最新提交后 `src/shardkv` 的 `go test -run 5B -count=1 -timeout 600s` 通过。 | `src/shardctrler/` 与 `src/shardkv/`；测试文件分别在 `src/shardctrler/test_test.go`、`src/shardkv/test_test.go`。 |
+| Lab 1: MapReduce | 已完成 | `src/mr/` | Coordinator 分配 Map/Reduce 任务，Worker 执行并生成中间文件和最终输出。 |
+| Lab 2: Key/Value Server | 已完成 | `src/kvsrv/` | 单机 `Get/Put/Append`，通过唯一请求 ID 避免重复写。 |
+| Lab 3: Raft | 已完成 3A-3D | `src/raft/` | leader election、日志复制、持久化、snapshot。 |
+| Lab 4: Fault-tolerant KV | 已完成 | `src/kvraft/` | KV 请求进入 Raft，支持去重和 snapshot。 |
+| Lab 5: Sharded KV | 已完成 5A/5B | `src/shardctrler/`、`src/shardkv/` | ShardCtrler 管配置，ShardKV 负责分片迁移和服务请求。 |
 
-## 各 Lab 说明
+## 学习路线
+
+```mermaid
+flowchart LR
+    A["Lab1<br/>任务分发"] --> B["Lab2<br/>RPC + 去重"]
+    B --> C["Lab3A<br/>选举"]
+    C --> D["Lab3B<br/>日志复制"]
+    D --> E["Lab3C/3D<br/>持久化 + 快照"]
+    E --> F["Lab4A<br/>KV 请求进 Raft"]
+    F --> G["Lab4B<br/>KV Snapshot"]
+    G --> H["Lab5A<br/>配置控制器"]
+    H --> I["Lab5B<br/>分片迁移"]
+```
+
+| Lab | 主题 | 推荐阅读 |
+| --- | --- |
+| Lab 1 | MapReduce | [Lab1 MapReduce 核心操作](src/mr/notes/lab1-mapreduce-core-operations.md) |
+| Lab 2 | 单机 KV Server | [Lab2 KVServer 核心操作](src/kvsrv/notes/lab2-kvsrv-core-operations.md) |
+| Lab 3A | Raft 选举与心跳 | [Lab3A Raft 选举与心跳](src/raft/notes/lab3a-election-and-heartbeat.md) |
+| Lab 3B | Raft 日志复制与提交 | [Lab3B Raft 日志复制与提交](src/raft/notes/lab3b-log-replication.md) |
+| Lab 3C/3D | Raft 持久化与快照 | [Lab3C/3D Raft 持久化与快照](src/raft/notes/lab3c3d-persistence-and-snapshot.md) |
+| Lab 4A | KV over Raft | [Lab4A KVRaft 核心请求链路](src/kvraft/notes/lab4a-kvraft-core-operations.md) |
+| Lab 4B | KVRaft Snapshot | [Lab4B KVRaft Snapshot 与恢复](src/kvraft/notes/lab4b-kvraft-snapshot-recovery.md) |
+| Lab 5A | ShardCtrler | [Lab5A ShardCtrler 核心操作](src/shardctrler/notes/lab5a-shardctrler.md) |
+| Lab 5B | ShardKV | [Lab5B ShardKV 角色与操作表](src/shardkv/notes/lab5b-roles-and-operations.md) |
+
+## 各 Lab 简述
 
 ### Lab 1: MapReduce
 
-Lab 1 的目标是实现 MapReduce 运行框架，而不是具体的词频统计逻辑。应用只需要提供 `mapf` 和 `reducef`，框架负责读取输入文件、分配任务、生成中间文件、按 key 分区并执行 Reduce。
+实现简化版 MapReduce 框架。`coordinator.go` 维护任务状态并处理超时重试；`worker.go` 执行 Map/Reduce 逻辑，生成 `mr-X-Y` 中间文件和 `mr-out-X` 输出文件。
 
-当前实现位于 `src/mr/`。`coordinator.go` 负责维护任务状态、向 Worker 分配任务，并在任务超过 10 秒未完成时重新分配；`worker.go` 负责执行 Map/Reduce 逻辑、写入 `mr-X-Y` 中间文件和 `mr-out-X` 输出文件。
+详细图解见 [Lab1 MapReduce 核心操作](src/mr/notes/lab1-mapreduce-core-operations.md)。
 
 ### Lab 2: Key/Value Server
 
-Lab 2 的目标是实现一个单机 KV 服务。它需要支持基本的 `Get`、`Put`、`Append` RPC，并处理网络不可靠时客户端重复发送请求的问题。
+实现单机 KV 服务。服务端用内存 map 保存数据，并通过唯一请求 ID 过滤重复 `Put/Append` 请求。
 
-当前实现位于 `src/kvsrv/`。服务端用 `map[string]string` 保存数据，用请求 ID 记录已经处理过的 `Put/Append`，避免同一个请求被重复执行；客户端在 RPC 失败时持续重试。
+详细图解见 [Lab2 KVServer 核心操作](src/kvsrv/notes/lab2-kvsrv-core-operations.md)。
 
 ### Lab 3: Raft
 
-Lab 3 的目标是实现 Raft 共识模块，为后续容错 KV 服务提供复制日志能力。
+实现 Raft 共识模块，包括选举、日志复制、持久化和快照。已有部分循环测试记录保存在 `src/raft/test_result/`。
 
-- Lab 3A: 实现 leader election 和 heartbeat。
-- Lab 3B: 实现日志复制、提交和应用。
-- Lab 3C: 实现 `currentTerm`、`votedFor`、日志等 Raft 状态持久化。
-- Lab 3D: 实现 snapshot 与 InstallSnapshot，避免日志无限增长。
+详细图解见：
 
-当前实现位于 `src/raft/`。已有测试记录主要覆盖 3C，多轮结果保存在 `src/raft/test_result/test_2_500times.txt`。
+- [Lab3A Raft 选举与心跳](src/raft/notes/lab3a-election-and-heartbeat.md)
+- [Lab3B Raft 日志复制与提交](src/raft/notes/lab3b-log-replication.md)
+- [Lab3C/3D Raft 持久化与快照](src/raft/notes/lab3c3d-persistence-and-snapshot.md)
 
 ### Lab 4: Fault-tolerant Key/Value Service
 
-Lab 4 的目标是在 Raft 之上实现线性一致的容错 KV 服务。客户端请求先交给当前 leader，再通过 Raft 日志复制到多数节点，提交后由 KVServer 应用到本地状态机。
+在 Raft 上实现容错 KV 服务。客户端请求由 leader 提交到 Raft，提交后应用到状态机；当 Raft 日志过大时生成 snapshot。
 
-- Lab 4A: 不使用快照，实现基于 Raft 的容错 KV 服务。
-- Lab 4B: 增加快照，当 Raft 日志过大时压缩 KV 状态，重启后可从快照恢复。
+详细图解见：
 
-当前实现位于 `src/kvraft/`。`server.go` 中实现了请求提交、等待 Raft apply、重复请求过滤、状态机更新和快照保存/恢复；`client.go` 中实现了 leader 重试和请求 ID 生成。已有测试结果文件 `src/kvraft/test_result/result.txt` 记录了 4A 的 10 轮 race 测试通过。
+- [Lab4A KVRaft 核心请求链路](src/kvraft/notes/lab4a-kvraft-core-operations.md)
+- [Lab4B KVRaft Snapshot 与恢复](src/kvraft/notes/lab4b-kvraft-snapshot-recovery.md)
 
 ### Lab 5: Sharded Key/Value Service
 
-Lab 5 的目标是把 KV 服务扩展为分片系统。ShardCtrler 维护全局配置，决定每个 shard 属于哪个 replica group；ShardKV 则需要根据配置处理请求、迁移 shard，并在配置变更、故障、重启和网络不可靠时保持正确性。
+实现经典分片 KV 架构：
 
-当前实现已经完成 Lab 5A/5B。`src/shardctrler/` 中的控制器通过 Raft 复制 Join、Leave、Move、Query 操作，维护按编号递增的 Config，并在 group 变化时确定性地重新分配 shard。`src/shardkv/` 中的分片 KV 服务会周期性拉取下一份配置，把配置变更、客户端请求、shard 插入和旧 shard 删除都放进本组 Raft 日志中执行。
+- ShardCtrler 维护配置历史，决定固定数量 shard 分别属于哪个 replica group。
+- ShardKV group 内部是一组 Raft server，负责复制并服务自己名下的 shard。
+- 配置变化后，ShardKV 根据 `lastConfig/currentConfig` 判断 shard 迁入和迁出，并执行拉取、GC 和状态收尾。
 
-Lab 5A 中 ShardCtrler 的操作、group/Raft 关系、配置结构、流程图和 rebalance 逻辑整理在 [Lab5A ShardCtrler 核心操作](src/shardctrler/notes/lab5a-shardctrler.md)。
+```mermaid
+flowchart LR
+    C["Client"] -->|Query config| SC["ShardCtrler<br/>Lab5A"]
+    C -->|Get / Put / Append| G1["ShardKV group<br/>gid=100"]
+    C -->|Get / Put / Append| G2["ShardKV group<br/>gid=101"]
 
-ShardKV 的迁移流程使用 `Serving`、`Pulling`、`BePulling`、`GCing` 几种 shard 状态。新 owner 进入 `Pulling` 后向旧 owner 拉取 shard 数据和 `LastRequestMap` 去重表，成功写入本组 Raft 后进入 `GCing`；随后通知旧 owner 删除旧 shard，删除确认后再把本地状态改回 `Serving`。这样可以在配置切换期间拒绝错误 shard 请求，并保持 Put/Append 的 at-most-once 语义。
+    SC -->|Config: shard -> gid| G1
+    SC -->|Config: shard -> gid| G2
+    G1 <-->|GetShards / DeleteShards| G2
 
-Lab 5B 中各角色可以触发的请求、group/Raft 关系、Raft command、迁移图和 shard 状态变化整理在 [Lab5B ShardKV 角色与操作表](src/shardkv/notes/lab5b-roles-and-operations.md)。
+    subgraph R1["gid=100 Raft group"]
+        A1["server"]
+        A2["server"]
+        A3["server"]
+    end
 
-快照方面，ShardKV 会在 Raft 状态超过 `maxraftstate` 后保存 `shards`、`LastRequestMap`、`lastConfig` 和 `currentConfig`，重启时从 snapshot 恢复这些状态。最新验证命令为 `cd src/shardkv && go test -run 5B -count=1 -timeout 600s`。
+    subgraph R2["gid=101 Raft group"]
+        B1["server"]
+        B2["server"]
+        B3["server"]
+    end
+
+    G1 --- R1
+    G2 --- R2
+```
+
+详细图解见：
+
+- [Lab5A ShardCtrler 核心操作](src/shardctrler/notes/lab5a-shardctrler.md)
+- [Lab5B ShardKV 角色与操作表](src/shardkv/notes/lab5b-roles-and-operations.md)
 
 ## 常用测试命令
 
@@ -96,10 +195,12 @@ cd src/kvraft
 go test -run 4A -race
 go test -run 4B -race
 
-# Lab 5
+# Lab 5A
 cd src/shardctrler
 go test
-cd ../shardkv
+
+# Lab 5B
+cd src/shardkv
 go test -run 5A
-go test -run 5B -timeout 600s
+go test -run 5B -count=1 -timeout 600s
 ```
