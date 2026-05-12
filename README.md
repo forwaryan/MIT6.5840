@@ -2,6 +2,12 @@
 
 本仓库是 MIT 6.5840 分布式系统课程实验实现，代码骨架来自 `6.5840-golabs-2024`。当前实现覆盖 MapReduce、KV Server、Raft、KV over Raft，以及经典 `shardctrler + shardkv` 分片 KV 架构。
 
+## 文档定位
+
+文档组织参考 [casey-li/MIT6.5840](https://github.com/casey-li/MIT6.5840) 这种按 Lab 记录理解、实现思路、踩坑和验证经验的方式；本仓库在此基础上更偏向“当前代码走读”：每个 Lab 尽量说明核心对象、RPC/Raft 链路、状态变化、容易混淆的边界和测试入口。
+
+这些笔记不是课程官方说明，也不是完整论文翻译，而是给自己复盘实现和排查 bug 用的工程笔记。测试通过只能说明覆盖了当前测试场景，分布式系统里的超时、乱序、重启和分区组合仍然需要结合代码继续检查。
+
 ```mermaid
 flowchart LR
     L1["Lab 1<br/>MapReduce"] --> L2["Lab 2<br/>单机 KV"]
